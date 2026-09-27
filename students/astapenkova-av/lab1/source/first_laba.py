@@ -5,7 +5,7 @@ import matplotlib.pyplot as plt
 from sklearn.datasets import load_iris
 from sklearn.metrics import (accuracy_score, precision_score, recall_score, f1_score, confusion_matrix)
 
-data = pd.read_csv("/Users/arlinrus/Desktop/fall-2026/students/astapenkova-av/lab1/source/diabetes_risk.csv", sep=',')
+data = pd.read_csv(" ~/diabetes_risk.csv", sep=',')
 
 # print("Размер датасета:", data.shape)
 
