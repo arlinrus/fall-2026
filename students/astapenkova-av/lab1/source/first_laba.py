@@ -5,7 +5,7 @@ import matplotlib.pyplot as plt
 from sklearn.datasets import load_iris
 from sklearn.metrics import (accuracy_score, precision_score, recall_score, f1_score, confusion_matrix)
 
-data = pd.read_csv(" ~/diabetes_risk.csv", sep=',')
+data = pd.read_csv("~/diabetes_risk.csv", sep=',')
 
 # print("Размер датасета:", data.shape)
 
@@ -21,14 +21,8 @@ data = pd.read_csv(" ~/diabetes_risk.csv", sep=',')
 # # дубликаты
 # print(data.duplicated().sum())
 
+target_column = 'diabetes_risk' # таргетированная колнка(риск диабета)
 
-data["alcohol_consumption"] = data["alcohol_consumption"].fillna(data["alcohol_consumption"].mode()[0])
-data["smoking_status"] = data["smoking_status"].fillna(data["smoking_status"].mode()[0])
-data["income_bracket"] = data["income_bracket"].fillna(data["income_bracket"].mode()[0])
-
-target_column = data.columns[-1] # таргетированная колнка(риск диабета)
-
-# Separate input and output
 X = data.drop(columns=[target_column, "patient_id"])
 y = data["diabetes_risk"].map({
     "Low": -1,
@@ -36,33 +30,34 @@ y = data["diabetes_risk"].map({
     "High": 1
 })
 
-# print("\nTarget values:")
-# print(np.unique(y))
+print(np.unique(y))
+X_train, X_test, y_train, y_test = train_test_split(X,y,test_size = 0.2,random_state=42,stratify=y)
 
+X_train = X_train.copy()
+X_test = X_test.copy()
+
+mode_columns = ["alcohol_consumption", "smoking_status", "income_bracket"]
+for column in mode_columns:
+    train_mode = X_train[column].mode(dropna=True)
+    fill_value = train_mode.iloc[0]
+    X_train[column] = X_train[column].fillna(fill_value)
+    X_test[column] = X_test[column].fillna(fill_value)
 categorical_columns = X.select_dtypes(include=["object", "category", "bool"]).columns.tolist()
 
-# print("\nCategorical columns:")
-# print(categorical_columns)
+print("\nCategorical columns:")
+print(categorical_columns)
 
-X = pd.get_dummies(
-    X,
-    columns = categorical_columns,
-    drop_first = True
-)
+X_train = pd.get_dummies(X_train, columns=categorical_columns,drop_first=True)
 
-X = X.astype(float)
+X_test = pd.get_dummies(X_test, columns=categorical_columns, drop_first=True)
 
-X_train, X_test, y_train, y_test = train_test_split(
-    X,
-    y,
-    test_size = 0.2,
-    random_state=42,
-    stratify=y)
-# print("\nTraining data shape:", X_train.shape)
-# print("Testing data shape:", X_test.shape)
+X_train = X_train.astype(float)
+X_test = X_test.astype(float)
+print("\nTraining data shape:", X_train.shape)
+print("Testing data shape:", X_test.shape)
 
 n_features = X_train.shape[1]
-# print(n_features)
+print(n_features)
 
 w = np.random.uniform(
     -1 / (2 * n_features),
@@ -134,8 +129,8 @@ def steepest_gradient_step(x_i):
     x_i = np.asarray(x_i, dtype=float)
     x_2 = np.sum(x_i**2)
     if x_2 == 0:
-          raise ValueError("Norm of x_2 is zero")
-    return 1 / x_2
+          raise ValueError("Norm is zero")
+    return 1 /(2 * x_2)
 
 # Реализовать предъявление объектов по модулю отступа (п.8):
 # чем меньше |M_i|, тем больше вероятность выбрать объект
@@ -231,11 +226,7 @@ def SGD_steepest(
     )
  
     # Q
-    Q_ind = rng.choice(
-        len(X),
-        size=min(q_sz, len(X)),
-        replace=False
-    )
+    Q_ind = rng.choice(len(X), size=min(q_sz, len(X)),replace=False)
  
     losses = []
  
@@ -264,33 +255,19 @@ def SGD_steepest(
         x_i = X[i]
         y_i = y[i]
  
-        e_i = quadratic_loss(
-            x_i,
-            y_i,
-            w
-        )
+        e_i = quadratic_loss(x_i, y_i, w)
  
-        gradient = gradient_loss(
-            x_i,
-            y_i,
-            w
-        )
+        gradient = gradient_loss(x_i, y_i,w)
  
         # h* = ||x_i||^-2
-        h_i = steepest_gradient_step(
-            x_i
-        )
+        h_i = steepest_gradient_step(x_i)
  
         w = w - h_i * gradient
  
-        Q = update_quality(
-            Q, e_i,lambda_
-        )
+        Q = update_quality(Q, e_i,lambda_)
  
-        if (
-            np.linalg.norm(w - w_old) < eps
-            and abs(Q - Q_old) < eps
-        ):
+        if (np.linalg.norm(w - w_old) < eps
+            and abs(Q - Q_old) < eps):
             break
  
     return w, Q
@@ -331,6 +308,7 @@ lambda_ = 0.01
 gamma = 0.9
 q_sz = 100
 eps = 1e-6
+tau = 1e-3
 
 w_corr = weights_correlation(X_train, y_train)
 
@@ -342,7 +320,8 @@ w_corr = SGD(
     lambda_,
     gamma,
     q_sz,
-    eps
+    eps, 
+    tau=tau
 )
 
 margins_corr_trained = np.sort(margin_classifier(X_train, y_train, w_corr))
@@ -381,7 +360,8 @@ for start in range(n_starts):
         lambda_,
         gamma,
         q_sz,
-        eps
+        eps,
+        tau=tau
     )
 
     # считаем среднюю квадратичную ошибку после обучения
@@ -391,9 +371,8 @@ for start in range(n_starts):
         w_trained
     )
 
-    current_loss = np.mean(
-        (1 - margins) ** 2
-    )
+    current_loss = l2_loss(np.mean((1-margins)**2), w_trained, tau)
+    
 
     if current_loss < best_loss:
         best_loss = current_loss
@@ -568,7 +547,33 @@ reference_f1 = f1_score(
     y_pred_reference,
     pos_label=1
 )
- 
+
+
+# Метрики качества модели
+y_pred_own = predict(X_test, best_own_w)
+metrics_names = ["Accuracy", "Precision", "Recall", "F1"]
+metrics_values = own_metrics
+plt.figure(figsize=(7, 4))
+plt.bar(metrics_names, metrics_values)
+plt.ylim(0, 1)
+plt.title("Качество модели")
+plt.ylabel("Значение")
+plt.show()
+
+# мтрица ошибок 
+cm = confusion_matrix(y_test, y_pred_own)
+plt.figure(figsize=(5, 4))
+plt.imshow(cm)
+plt.title("Матрица ошибок")
+plt.xlabel("Предсказанный класс")
+plt.ylabel("Истинный класс")
+plt.xticks([0, 1], ["-1", "1"])
+plt.yticks([0, 1], ["-1", "1"])
+for i in range(2):
+    for j in range(2):
+        plt.text(j, i, cm[i, j], ha="center", va="center")
+plt.show()
+
 print("Эталонная модель:")
 print("Accuracy (доля верных ответов):", reference_accuracy)
 print("Precision (точность):", reference_precision)
