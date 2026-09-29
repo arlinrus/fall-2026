@@ -27,7 +27,7 @@ tau = 1e-3 #l2 регуляризация
 # # дубликаты
 # print(data.duplicated().sum())
 
-target_column = 'diabetes_risk' # таргетированная колнка(риск диабета)
+target_column = 'diabetes_risk' # таргетированная колонка(риск диабета)
 
 X = data.drop(columns=[target_column, "patient_id"])
 y = data["diabetes_risk"].map({
@@ -65,18 +65,13 @@ print("Testing data shape:", X_test.shape)
 n_features = X_train.shape[1]
 print(n_features)
 
-w = np.random.uniform(
-    -1 / (2 * n_features),
-    1 / (2 * n_features),
-    size=n_features
-)
+w = np.zeros(n_features)
 
 # Реализовать вычисление отступа объекта (визуализировать, проанализировать)
 def margin_classifier(X, y, w):
   X = np.asarray(X)
   y = np.asarray(y)
-  return y * (X @ w)
-
+  return y * (X @ w) 
 margins = margin_classifier(X_train, y_train, w)
 margins_sorted = np.sort(margins)
 
