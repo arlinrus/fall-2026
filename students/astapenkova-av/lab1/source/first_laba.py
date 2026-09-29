@@ -7,8 +7,8 @@ from sklearn.metrics import (accuracy_score, precision_score, recall_score, f1_s
 data = pd.read_csv("/Users/arlinrus/Desktop/fall-2026/students/astapenkova-av/lab1/source/diabetes_risk.csv", sep=',')
 
 h = 1e-5 # шаг
-lambda_ = 0.001
-gamma = 0.9
+lambda_ = 0.001 # какая доля новой ошибки учитывается в новом Q
+gamma = 0.9 # насколько сильно учитывается предыдущая инерция
 q_sz = 100 # выбираются примрено 100 случайных обектов
 eps = 1e-6 #порог чувствительности
 tau = 1e-3 #l2 регуляризация
