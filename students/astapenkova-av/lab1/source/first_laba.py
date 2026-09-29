@@ -218,13 +218,7 @@ def SGD_steepest(X, y, w, lambda_, q_sz, eps, max_iter, random_state=42):
     losses = []
  
     for i in Q_ind:
-        losses.append(
-            quadratic_loss(
-                X[i],
-                y[i],
-                w
-            )
-        )
+        losses.append(quadratic_loss( X[i], y[i], w))
  
     Q = np.mean(losses)
  
