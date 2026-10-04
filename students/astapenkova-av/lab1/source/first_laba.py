@@ -118,10 +118,10 @@ def l2_gradient(gradient, w, tau):  # добавляет L2-компонент �
 # Реализовать скорейший градиентный спуск
 def steepest_gradient_step(x_i):
     x_i = np.asarray(x_i, dtype=float)
-    x_2 = np.sum(x_i**2)
+    x_2 = np.sum(x_i ** 2)
     if x_2 == 0:
-          raise ValueError("Norm is zero")
-    return 1 /(x_2)
+        raise ValueError("Norm is zero")
+    return 1 / (2 * x_2) # исправила формулу
 
 # Реализовать предъявление объектов по модулю отступа (п.8):
 # чем меньше |M_i|, тем больше вероятность выбрать объект
