@@ -20,7 +20,7 @@ data = pd.read_csv('/Users/arina/Desktop/university/fall-2026/students/astapenko
 #print(data.duplicated().sum()) # ноль дублей
 
 # категориальные данные
-print(data.columns.tolist())
+#print(data.columns.tolist())
 
 # пропущенные значения
 #print(data.dtypes)
@@ -31,6 +31,7 @@ X = data.drop(columns=[target])
 categorial = X.select_dtypes(include='object').columns.tolist()
 X = pd.get_dummies(X, columns=categorial, drop_first=True, dtype=int)
 y = data[target]
+
 
 X_train, X_test, y_train, y_test = train_test_split(X, y, test_size = 0.2, random_state=42, stratify=y)
 
@@ -75,10 +76,8 @@ def parzen_window(X_train, y_train, x, k, p=2, kernel=gausen_kernel):
     return max(scores, key=scores.get)
 
 def parzen_predict(X_train, y_train, X_test, k, p=2, kernel=gausen_kernel):
-
     predictions = []
     for x in X_test:
-
         prediction = parzen_window(X_train, y_train, x, k, p=p, kernel=kernel)
         predictions.append(prediction)
 
@@ -103,7 +102,6 @@ def best_k(X, y, k_v, p=2, kernel=gausen_kernel):
     for k in k_v:
         error = loo(X, y, k, p=p, kernel=kernel)
         loo_errors.append(error)
-
     loo_errors = np.array(loo_errors)
     best_index = np.argmin(loo_errors)
     optimal = k_v[best_index]
@@ -140,13 +138,6 @@ def draw_decision_map(ax, X_ref, y_ref, pca, lims, k, X_pts, y_pts, title,
     ax.set_title(title)
 
 
-# 3. подобрать параметр k методом скользящего контроля (LOO)
-# 4. обосновать выбор параметров алгоритма, построить графики эмпирического риска для различных k;
-
-# 5. сравнить с [эталонной](https://scikit-learn.org/stable/) реализацией KNN;
-#    1. сравнить качество работы алгоритмов;
-# 6. реализовать алгоритм отбора эталонов;
-# Алгоритм STOLP для отбора эталонных объектов
 def pairwise_dist(A, B, p=2):
     diff = np.abs(A[:, None, :] - B[None, :, :])
     if p == np.inf:
@@ -154,19 +145,19 @@ def pairwise_dist(A, B, p=2):
     return np.sum(diff ** p, axis=2) ** (1.0 / p)
 
 def parzen_margins(D, y_ref, y_query, k, n_valid, kernel=gausen_kernel):
-    kk = min(k, n_valid - 1)
-    order = np.argsort(D, axis=1)
-    sd = np.take_along_axis(D, order, axis=1)
-    sl = y_ref[order]
-    h = sd[:, kk]
-    h = np.where(h == 0, 1e-12, h)
-    W = kernel(sd / h[:, None])
-    classes = np.unique(y_ref)
-    G = np.stack([(W * (sl == c)).sum(axis=1) for c in classes], axis=1)
-    own = classes[None, :] == y_query[:, None]
-    g_own = (G * own).sum(axis=1)
-    g_other = np.where(own, -np.inf, G).max(axis=1)
-    total = np.where(G.sum(axis=1) == 0, 1e-12, G.sum(axis=1))
+    kk = min(k, n_valid - 1)              # индекс соседа: берём k-го соседа, но не выходим за число доступных соседей
+    order = np.argsort(D, axis=1)         # для каждого объекта получаем индексы, соседей в порядке возрастания расстояния
+    sd = np.take_along_axis(D, order, axis=1) # сортируем расстояния от ближайшего к дальнему
+    sl = y_ref[order]                    
+    h = sd[:, kk] # ширина окна Парзена
+    h = np.where(h == 0, 1e-12, h)        
+    W = kernel(sd / h[:, None])    
+    classes = np.unique(y_ref)             
+    G = np.stack([(W * (sl == c)).sum(axis=1) for c in classes],axis=1)  # для каждого объекта считаем суммарный вес соседей каждого класса G имеет размер (объекты × классы)
+    own = classes[None, :] == y_query[:, None] # создаём маску: какой столбец G соответствует
+    g_own = (G * own).sum(axis=1)          # суммарный вес соседей собственного класса
+    g_other = np.where(own, -np.inf, G).max(axis=1) # максимальный суммарный вес среди всех остальных классов
+    total = np.where(G.sum(axis=1) == 0, 1e-12, G.sum(axis=1))  # общий вес всех соседей
     return (g_own - g_other) / total
 
 def stolp(X, y, k, delta=0.5, l0=10, p=2, kernel=gausen_kernel):
@@ -242,7 +233,6 @@ if __name__ == "__main__":
     ref_model = KNeighborsClassifier(n_neighbors=optimal_k)
     ref_model.fit(X_train, y_train)
     print(f"Точность sklearn KNN (k={optimal_k}): {ref_model.score(X_test, y_test):.4f}")
- 
  
     omega, noise, history = stolp(X_train, y_train, optimal_k, delta=0.5, l0=10)
     X_proto, y_proto = X_train[omega], y_train[omega]
