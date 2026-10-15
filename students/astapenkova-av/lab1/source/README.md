@@ -87,35 +87,19 @@ $$
 Теперь возьмём градиент по весам $w$:
 
 $$
-\nabla_w L_i
-=
-\nabla_w \left(1 - y_i x_i^T w\right)^2
+\nabla_w L_i = \nabla_w \left(1 - y_i x_i^T w\right)^2
 $$
 
 По правилу цепочки:
 
 $$
-\nabla_w L_i
-=
-2\left(1 - y_i x_i^T w\right)
-\cdot
-\nabla_w\left(1 - y_i x_i^T w\right)
+\nabla_w L_i = 2\left(1 - y_i x_i^T w\right) \cdot \nabla_w \left(1 - y_i x_i^T w\right)
 $$
 
-Так как:
+Так как $\nabla_w \left(1 - y_i x_i^T w\right) = -y_i x_i$, получаем:
 
 $$
-\nabla_w\left(1 - y_i x_i^T w\right)
-=
--y_i x_i
-$$
-
-получаем:
-
-$$
-\nabla_w L_i
-=
--2\left(1 - y_i x_i^T w\right)y_i x_i
+\nabla_w L_i = -2\, y_i x_i \left(1 - y_i x_i^T w\right)
 $$
 
 А так как:
