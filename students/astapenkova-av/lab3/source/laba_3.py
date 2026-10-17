@@ -5,12 +5,10 @@ from scipy.optimize import minimize
 from sklearn.model_selection import train_test_split
 from sklearn.svm import SVC
 import time
-import os
 from sklearn.model_selection import GridSearchCV # для выбора оптимальной модели
 from sklearn.datasets import load_breast_cancer
 from pathlib import Path
 from sklearn.pipeline import Pipeline
-from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import StratifiedKFold
 
 images_dir = Path(__file__).resolve().parent / "images"
@@ -147,26 +145,26 @@ def fit_sklearn(X, y, kernel_name, C, gamma=1/30):
  
 print("обучение:", X_train.shape, " тест:", X_test.shape)
  
-kernel = linear_kernel   # выбранное ядро
+# # kernel = linear_kernel   # выбранное ядро
 
-t0 = time.time()
-model = fit(X_train, y_train, kernel, C)
-print(f"обучение заняло {time.time() - t0:.1f} с")
-print(f"точность на обучении: {accuracy(y_train, predict(model, X_train)):.4f}")
-print(f"точность на тесте:    {accuracy(y_test, predict(model, X_test)):.4f}")
+# t0 = time.time()
+# model = fit(X_train, y_train, kernel, C)
+# print(f"обучение заняло {time.time() - t0:.1f} с")
+# print(f"точность на обучении: {accuracy(y_train, predict(model, X_train)):.4f}")
+# print(f"точность на тесте:    {accuracy(y_test, predict(model, X_test)):.4f}")
  
-# сравнение с эталоном 
-sk_model = SVC(kernel="linear", C=C, tol=1e-8)
-sk_model.fit(X_train, y_train)
+# # сравнение с эталоном 
+# sk_model = SVC(kernel="linear", C=C, tol=1e-8)
+# sk_model.fit(X_train, y_train)
  
-own_pred = predict(model, X_test)
-sk_pred = sk_model.predict(X_test)
+# own_pred = predict(model, X_test)
+# sk_pred = sk_model.predict(X_test)
  
-print(f"\n{'':28}{'своя':>10}{'sklearn':>10}")
-print(f"{'точность на тесте':28}{accuracy(y_test, own_pred):>10.4f}{accuracy(y_test, sk_pred):>10.4f}")
-print(f"{'число опорных векторов':28}{len(model['lam_sv']):>10d}{int(sk_model.n_support_.sum()):>10d}")
-print(f"{'w0':28}{model['w0']:>10.4f}{-sk_model.intercept_[0]:>10.4f}")
-print(f"доля совпавших предсказаний: {np.mean(own_pred == sk_pred):.4f}")
+# print(f"\n{'':28}{'своя':>10}{'sklearn':>10}")
+# print(f"{'точность на тесте':28}{accuracy(y_test, own_pred):>10.4f}{accuracy(y_test, sk_pred):>10.4f}")
+# print(f"{'число опорных векторов':28}{len(model['lam_sv']):>10d}{int(sk_model.n_support_.sum()):>10d}")
+# print(f"{'w0':28}{model['w0']:>10.4f}{-sk_model.intercept_[0]:>10.4f}")
+# print(f"доля совпавших предсказаний: {np.mean(own_pred == sk_pred):.4f}")
 
 # попоробуем подобрать с помощью GScv
 Cs = [0.01, 0.1, 1, 10, 100]
@@ -188,18 +186,15 @@ def make_kernel(name, p):
         return quad_kernel
     if name == "poly":
         return lambda A, B: poly_kernel(
-            A, B, p["degree"], p["gamma"]
-        )
+            A, B, p["degree"], p["gamma"])
     if name == "poly_monoms":
         return lambda A, B: poly_monoms(
-            A, B, p["degree"], p["gamma"]
-        )
+            A, B, p["degree"], p["gamma"])
     if name == "sigmoid":
         return lambda A, B: sigmoid_activ(A, B, p["gamma"], -p["coef0"])
     if name == "rbf":
         return lambda A, B: rbf_kernel(
-            A, B, p["gamma"]
-        )
+            A, B, p["gamma"])
     raise ValueError(f"Неизвестное ядро: {name}")
 
 searches = {}
@@ -215,12 +210,10 @@ print(
 )
 
 for name, grid in grids.items():
-    pipeline = Pipeline([("scaler", StandardScaler()), ("svc", SVC(max_iter=2_000_000))])
+    pipeline = Pipeline([("svc", SVC(max_iter=2_000_000))])
 
-    grid_pipeline = {
-        "svc__" + key: value
-        for key, value in grid.items()
-    }
+    grid_pipeline = {"svc__" + key: value
+        for key, value in grid.items()}
 
     s = GridSearchCV(
         estimator=pipeline,
@@ -241,25 +234,21 @@ for name, grid in grids.items():
 
     own_acc = accuracy(
         y_test,
-        predict(m, X_test)
-    )
+        predict(m, X_test))
 
     sk_acc = s.best_estimator_.score(
         X_test,
-        y_test
-    )
-
+        y_test)
+    
     print(
         f"{name:12}"
         f"{s.best_score_:>10.4f}"
         f"{own_acc:>12.4f}"
         f"{sk_acc:>15.4f}"
-        f"{len(m['lam_sv']):>12d}  {p}"
-    )
+        f"{len(m['lam_sv']):>12d}  {p}")
 chosen_name = max(
     searches,
-    key=lambda n: searches[n].best_score_
-)
+    key=lambda n: searches[n].best_score_)
 
 chosen = models[chosen_name]
 chosen_sk = searches[chosen_name].best_estimator_
@@ -279,26 +268,22 @@ print(f"Accuracy sklearn:{accuracy(y_test, sk_pred):.4f}")
 
 print(
     "Доля совпавших предсказаний:",
-    f"{np.mean(own_pred == sk_pred):.4f}"
-)
+      f"{np.mean(own_pred == sk_pred):.4f}")
 
 print(
     "Средняя разница решающих функций:",
-    f"{np.mean(np.abs(a_own - a_sk)):.4e}"
-)
+    f"{np.mean(np.abs(a_own - a_sk)):.4e}")
 
 print(
     "Максимальная разница решающих функций:",
-    f"{np.max(np.abs(a_own - a_sk)):.4e}"
-)
+    f"{np.max(np.abs(a_own - a_sk)):.4e}")
 
 print(
     "Число опорных векторов:",
     len(chosen["lam_sv"]),
     "(своя),",
     chosen_sk.named_steps["svc"].support_.size,
-    "(sklearn)"
-)
+    "(sklearn)")
 
 images_dir = Path(__file__).resolve().parent / "images"
 images_dir.mkdir(parents=True, exist_ok=True)
