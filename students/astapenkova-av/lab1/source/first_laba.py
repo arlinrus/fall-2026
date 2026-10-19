@@ -3,8 +3,20 @@ import numpy as np
 from sklearn.model_selection import train_test_split
 import matplotlib.pyplot as plt
 from sklearn.metrics import (accuracy_score, precision_score, recall_score, f1_score, confusion_matrix)
+import subprocess
+from io import BytesIO
 
-data = pd.read_csv("/Users/arlinrus/Desktop/fall-2026/students/astapenkova-av/lab1/source/diabetes_risk.csv", sep=',')
+url = (
+    "https://raw.githubusercontent.com/"
+    "mohitbatheja/diabetes-risk-prediction-multinomial-logistic-regression/"
+    "main/diabetes_risk.csv")
+
+result = subprocess.run(
+    ["curl", "-fLsS", url],
+    capture_output=True,
+    check=True)
+
+data = pd.read_csv(BytesIO(result.stdout))
 
 h = 1e-5 # шаг
 lambda_ = 0.001 # какая доля новой ошибки учитывается в новом Q
@@ -36,8 +48,6 @@ y = data["diabetes_risk"].map({
     "High": 1
 })
 
-print(np.unique(y))
-
 X_train, X_test, y_train, y_test = train_test_split(X,y,test_size = 0.2,random_state=42,stratify=y)
 
 X_train = X_train.copy()
@@ -63,9 +73,14 @@ print("\nTraining data shape:", X_train.shape)
 print("Testing data shape:", X_test.shape)
 
 n_features = X_train.shape[1]
-print(n_features)
 
-w = np.zeros(n_features)
+rng = np.random.default_rng(42)
+
+w = rng.uniform(
+    -1 / (2 * n_features),
+    1 / (2 * n_features),
+    size=n_features
+)
 
 # Реализовать вычисление отступа объекта (визуализировать, проанализировать)
 def margin_classifier(X, y, w):
@@ -411,7 +426,7 @@ def evaluate(X, y, w):
 print("Инициализация через корреляцию:")
 evaluate(X_test, y_test, w_corr)
 
-print("\VМультистарт:")
+print("\V Мультистарт:")
 evaluate(X_test, y_test, best_w)
 
 print("\nСлучайная инициализация:")
