@@ -90,6 +90,33 @@ def main():
     G = F @ U_m
     F_hat = G @ U_m.T
 
+        # Потеря дисперсии по исходным признакам
+    print("\nПотеря дисперсии по исходным признакам:")
+
+    for j, name in enumerate(names):
+        original = F[:, j]
+        restored = F_hat[:, j]
+
+        error = np.sum((original - restored) ** 2)
+        total = np.sum(original ** 2)
+
+        lost_percent = error / total * 100
+        saved_percent = 100 - lost_percent
+
+        print(
+            f"{name}: сохранено {saved_percent:.2f}%, "
+            f"потеряно {lost_percent:.2f}%"
+        )
+
+    # НОВОЕ: анализ отброшенных главных компонент
+    print("\nОтброшенные главные компоненты:")
+
+    for j in range(m, U.shape[1]):
+        print(f"\nPC{j + 1}")
+
+        for i in np.argsort(np.abs(U[:, j]))[::-1]:
+            print(f"{names[i]}: {U[i, j]:.4f}")
+
     lam = sigma ** 2
     E_direct = np.linalg.norm(F - F_hat, "fro") ** 2 / np.linalg.norm(F, "fro") ** 2
     E_svd = np.sum(lam[m:]) / np.sum(lam)
