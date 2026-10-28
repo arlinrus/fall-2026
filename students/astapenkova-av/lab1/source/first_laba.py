@@ -5,6 +5,10 @@ import matplotlib.pyplot as plt
 from sklearn.metrics import (accuracy_score, precision_score, recall_score, f1_score, confusion_matrix)
 import subprocess
 from io import BytesIO
+from pathlib import Path
+
+IMAGES_DIR = Path(__file__).resolve().parent.parent / "images"
+IMAGES_DIR.mkdir(exist_ok=True)
 
 url = (
     "https://raw.githubusercontent.com/"
@@ -18,12 +22,13 @@ result = subprocess.run(
 
 data = pd.read_csv(BytesIO(result.stdout))
 
-h = 1e-5 # шаг
+h = 1e-3 # шаг
 lambda_ = 0.001 # какая доля новой ошибки учитывается в новом Q
 gamma = 0.9 # насколько сильно учитывается предыдущая инерция
 q_sz = 100 # выбираются примрено 100 случайных обектов
 eps = 1e-6 #порог чувствительности
 tau = 1e-3 #l2 регуляризация
+check_every = 200 # проверяем сходимость
 
 # print("Размер датасета:", data.shape)
 
@@ -59,18 +64,26 @@ for column in mode_columns:
     fill_value = train_mode.iloc[0]
     X_train[column] = X_train[column].fillna(fill_value)
     X_test[column] = X_test[column].fillna(fill_value)
-categorical_columns = X.select_dtypes(include=["object", "category", "bool"]).columns.tolist()
-
+categorical_columns = X.select_dtypes(exclude="number").columns.tolist()
 # print(categorical_columns)
 
-X_train = pd.get_dummies(X_train, columns=categorical_columns,drop_first=True)
+num_columns = X.select_dtypes(include="number").columns.tolist()
+mu = X_train[num_columns].mean()
+sigma = X_train[num_columns].std().replace(0, 1)
+X_train[num_columns] = (X_train[num_columns] - mu) / sigma
+X_test[num_columns] = (X_test[num_columns] - mu) / sigma
 
+X_train = pd.get_dummies(X_train, columns=categorical_columns,drop_first=True)
 X_test = pd.get_dummies(X_test, columns=categorical_columns, drop_first=True)
+X_test = X_test.reindex(columns=X_train.columns, fill_value=0)
 
 X_train = X_train.astype(float)
 X_test = X_test.astype(float)
-print("\nTraining data shape:", X_train.shape)
-print("Testing data shape:", X_test.shape)
+
+X_train["bias"] = -1.0
+X_test["bias"] = -1.0
+
+X_train, X_val, y_train, y_val = train_test_split(X_train, y_train, test_size=0.2, random_state=42, stratify=y_train)
 
 n_features = X_train.shape[1]
 
@@ -87,9 +100,16 @@ def margin_classifier(X, y, w):
   X = np.asarray(X)
   y = np.asarray(y)
   return y * (X @ w) 
-margins = margin_classifier(X_train, y_train, w)
-margins_sorted = np.sort(margins)
 
+def margin_stats(name, X, y, w):
+    m = margin_classifier(X, y, w)
+    print(f"{name}: доля M<0 = {np.mean(m < 0):.4f}, доля |M|<0.1 = {np.mean(np.abs(m) < 0.1):.4f}, "
+          f"mean = {m.mean():.4f}, min = {m.min():.4f}, max = {m.max():.4f}")
+
+margins = margin_classifier(X_train, y_train, w)
+margin_stats("До обучения", X_train, y_train, w) #
+margins_sorted = np.sort(margins)
+ 
 plt.figure(figsize=(10, 5))
 plt.plot( margins_sorted,label="Отступ")
 plt.axhline(0,color="red", linestyle="--", label="M = 0")
@@ -98,6 +118,7 @@ plt.ylabel("Отступ")
 plt.title("Отступы объектов до обучения")
 plt.legend()
 plt.grid()
+plt.savefig(IMAGES_DIR / "objects_before_learning.png", dpi=150, bbox_inches="tight")
 plt.show()
 
 # Непрерывные аппроксимации пороговой функции потерь
@@ -124,11 +145,13 @@ def update_quality(Q, loss, lambda_): #рекуррентное обновлен
 
 # Реализовать L2 регуляризацию 
 def l2_loss(loss, w, tau):
-  return loss + (tau / 2) * np.sum(w ** 2)
+    return loss + (tau / 2) * np.sum(w[:-1] ** 2)
 
 # градиент
-def l2_gradient(gradient, w, tau):  # добавляет L2-компонент к градиенту
-  return gradient + tau * w
+def l2_gradient(gradient, w, tau):
+    regularization = tau * w.copy()
+    regularization[-1] = 0.0
+    return gradient + regularization
 
 # Реализовать скорейший градиентный спуск
 def steepest_gradient_step(x_i):
@@ -148,12 +171,12 @@ def choose_by_margin(X, y, w, rng, eps=1e-8):
 
 
 # Реализовать метод стохастического градиентного спуска с инерцией
-def SGD(X, y, w, h, lambda_, gamma, q_sz, eps, max_iter=10000, by_margin = False, tau=0):
+def SGD(X, y, w, h, lambda_, gamma, q_sz, eps, max_iter=40000, by_margin = False, tau=0, seed=42):
     X = np.asarray(X, dtype=float)
     y = np.asarray(y, dtype=float)
     w = np.asarray(w, dtype=float).copy()
  
-    rng = np.random.default_rng(42)
+    rng = np.random.default_rng(seed)
  
     # Инициализировать оценку функционала
     # как среднее L(w, x_i) по случайному подмножеству
@@ -164,19 +187,14 @@ def SGD(X, y, w, h, lambda_, gamma, q_sz, eps, max_iter=10000, by_margin = False
     for i in Q_ind:
         loss = l2_loss(quadratic_loss(X[i], y[i], w), w, tau)
         losses.append(loss)
- 
+
     Q = np.mean(losses)
- 
-    # Начальное значение инерции
     v = np.zeros_like(w)
- 
-    for _ in range(max_iter):
- 
-        # Сохраняем предыдущие значения
-        w_o = w.copy()
-        Q_o = Q
- 
-        # Выбрать объект случайным образом
+
+    w_o = w.copy()
+    Q_o = Q
+
+    for n_iter in range(1, max_iter + 1): 
         if by_margin:
           i = choose_by_margin(X, y, w, rng)
         else:
@@ -205,17 +223,20 @@ def SGD(X, y, w, h, lambda_, gamma, q_sz, eps, max_iter=10000, by_margin = False
         # Q := λξ_i + (1 - λ)Q
         Q = update_quality(Q, e_i, lambda_)
  
-        # Проверка сходимости
-        if (
-            np.linalg.norm(w - w_o) < eps
-            and abs(Q - Q_o) < eps
-        ):
-            break
+        if n_iter % check_every == 0:
+            if (
+                np.linalg.norm(w - w_o) < eps
+                and abs(Q - Q_o) < eps
+            ):
+                break
+            w_o = w.copy()
+            Q_o = Q
  
+    print("SGD: итераций =", n_iter) 
     return w
  
 # Скорейший градиентный спуск
-def SGD_steepest(X, y, w, lambda_, q_sz, eps, max_iter, random_state=42):
+def SGD_steepest(X, y, w, lambda_, q_sz, eps, max_iter, tau=0, random_state=42):
     X = np.asarray(X, dtype=float)
     y = np.asarray(y, dtype=float)
     w = np.asarray(w, dtype=float).copy()
@@ -228,14 +249,14 @@ def SGD_steepest(X, y, w, lambda_, q_sz, eps, max_iter, random_state=42):
     losses = []
  
     for i in Q_ind:
-        losses.append(quadratic_loss( X[i], y[i], w))
+        losses.append(l2_loss(quadratic_loss( X[i], y[i], w), w, tau))
  
     Q = np.mean(losses)
  
-    for _ in range(max_iter):
+    w_old = w.copy() 
+    Q_old = Q
  
-        w_old = w.copy()
-        Q_old = Q
+    for n_iter in range(1, max_iter + 1): 
  
         # случайный объект
         i = rng.integers(
@@ -246,21 +267,26 @@ def SGD_steepest(X, y, w, lambda_, q_sz, eps, max_iter, random_state=42):
         x_i = X[i]
         y_i = y[i]
  
-        e_i = quadratic_loss(x_i, y_i, w)
+        e_i = l2_loss(quadratic_loss(x_i, y_i, w), w, tau)
  
-        gradient = gradient_loss(x_i, y_i,w)
+        gradient = l2_gradient(gradient_loss(x_i, y_i,w), w, tau) 
  
-        # h* = ||x_i||^-2
+        # h* = 1 / (2 ||x_i||^2) 
         h_i = steepest_gradient_step(x_i)
  
         w = w - h_i * gradient
  
         Q = update_quality(Q, e_i,lambda_)
  
-        if (np.linalg.norm(w - w_old) < eps
-            and abs(Q - Q_old) < eps):
-            break
+        if n_iter % check_every == 0:
+            if (np.linalg.norm(w - w_old) < eps
+                and abs(Q - Q_old) < eps):
+                break
+            w_old = w.copy()
+            Q_old = Q
+        
  
+    print("Скорейший спуск: итераций =", n_iter) 
     return w, Q
 
 norms = np.sum(np.asarray(X_train) ** 2, axis=1)
@@ -296,6 +322,7 @@ w_corr = weights_correlation(X_train, y_train)
 w_corr = SGD(X_train, y_train,w_corr,h,lambda_,gamma,q_sz,eps, tau=tau)
 
 margins_corr_trained = np.sort(margin_classifier(X_train, y_train, w_corr))
+margin_stats("Корреляция (после SGD)", X_train, y_train, w_corr) 
  
 plt.figure(figsize=(10, 5))
 plt.plot(margins_corr_trained, label="Отступ")
@@ -305,6 +332,7 @@ plt.ylabel("Отступ")
 plt.title("Отступы после обучения (инициализация через корреляцию)")
 plt.legend()
 plt.grid()
+plt.savefig(IMAGES_DIR / "inicialization_with_correlation.png", dpi=150, bbox_inches="tight")
 plt.show()
 
 # Обучить со случайной инициализацией весов через мультистарт
@@ -316,14 +344,14 @@ best_loss = np.inf
 for start in range(n_starts):
 
     # инициализация весов
-    w = np.random.uniform(
+    w = np.random.default_rng(100 + start).uniform(
         -1 / (2 * n_features),
         1 / (2 * n_features),
         size=n_features
     )
 
     # обучение
-    w_trained = SGD(X_train, y_train, w, h, lambda_, gamma, q_sz, eps,tau=tau)
+    w_trained = SGD(X_train, y_train, w, h, lambda_, gamma, q_sz, eps,tau=tau, seed=start)
 
     # считаем среднюю квадратичную ошибку после обучения
     margins = margin_classifier( X_train, y_train, w_trained)
@@ -335,6 +363,7 @@ for start in range(n_starts):
         best_w = w_trained.copy()
 
 best_margins = margin_classifier(X_train,y_train,best_w)
+margin_stats("Мультистарт (лучший)", X_train, y_train, best_w)
 
 sorted_best_margins = np.sort(best_margins)
 plt.figure(figsize=(10, 5))
@@ -345,20 +374,21 @@ plt.ylabel("Отступ")
 plt.title("Отступы после обучения (мультистарт)")
 plt.legend()
 plt.grid()
+plt.savefig(IMAGES_DIR / "random_and_margin.png", dpi=150, bbox_inches="tight")
 plt.show()
 
 # Обучить со случайным предъявлением и с п.8
-w_start = np.random.uniform(
+w_start = np.random.default_rng(7).uniform(
     -1 / (2 * n_features),
     1 / (2 * n_features),
     size=n_features
 )
 
 # без отступа
-w_random = SGD(X_train,y_train,w_start.copy(),h,lambda_,gamma,q_sz,eps,by_margin=False)
+w_random = SGD(X_train,y_train,w_start.copy(),h,lambda_,gamma,q_sz,eps,by_margin=False,tau=tau)
 
 #с отступом
-w_margin = SGD(X_train,y_train,w_start.copy(),h,lambda_,gamma,q_sz,eps,by_margin=True)
+w_margin = SGD(X_train,y_train,w_start.copy(),h,lambda_,gamma,q_sz,eps,by_margin=True,tau=tau)
 
 margins_random = margin_classifier(X_train,y_train,w_random)
 
@@ -378,7 +408,8 @@ w_steepest, Q_steepest = SGD_steepest(
     lambda_,
     q_sz,
     eps,
-    max_iter=10000
+    max_iter=40000,
+    tau=tau
 ) 
 
 margins_steepest = np.sort(margin_classifier(X_train, y_train, w_steepest))
@@ -400,6 +431,7 @@ plt.ylabel("Margin")
 plt.title("Рандомное предъявление vs предъявление by |margin|")
 plt.legend()
 plt.grid()
+plt.savefig(IMAGES_DIR / "margin.png", dpi=150, bbox_inches="tight")
 plt.show()
 
 # Оценим качество классификации
@@ -426,7 +458,7 @@ def evaluate(X, y, w):
 print("Инициализация через корреляцию:")
 evaluate(X_test, y_test, w_corr)
 
-print("\V Мультистарт:")
+print("\nМультистарт:")
 evaluate(X_test, y_test, best_w)
 
 print("\nСлучайная инициализация:")
@@ -434,6 +466,9 @@ evaluate(X_test, y_test, w_random)
 
 print("\nС отступом:")
 evaluate(X_test, y_test, w_margin)
+
+print("\nСкорейший спуск:")
+evaluate(X_test, y_test, w_steepest)
 
 #Сравним с квадратичной функцией потерь
 def mean_loss(X, y, w):
@@ -448,6 +483,11 @@ models = {
     "Скорейший спуск": w_steepest
 }
 
+print("\nОбученные пороги активации:")
+
+for name, weights in models.items():
+    print(f"{name}: w0 = {weights[-1]:.6f}")
+
 train_losses = {}
 
 for name, weights in models.items():
@@ -455,11 +495,13 @@ for name, weights in models.items():
     train_losses[name] = loss
     print(name, ":", loss)
 
-best_model_name = min(
-    train_losses,
-    key=train_losses.get
-)
-
+val_losses = {name: mean_loss(X_val, y_val, weights) for name, weights in models.items()}
+ 
+print("\nОшибка на валидации:")
+for name, loss in val_losses.items():
+    print(name, ":", loss)
+ 
+best_model_name = min(val_losses, key=val_losses.get)
 best_own_w = models[best_model_name]
 
 print("\nЛучшая собственная модель:", best_model_name)
@@ -496,6 +538,7 @@ plt.bar(metrics_names, metrics_values)
 plt.ylim(0, 1)
 plt.title("Качество модели")
 plt.ylabel("Значение")
+plt.savefig(IMAGES_DIR / "quality_model.png", dpi=150, bbox_inches="tight")
 plt.show()
 
 # мтрица ошибок 
@@ -510,7 +553,9 @@ plt.yticks([0, 1], ["-1", "1"])
 for i in range(2):
     for j in range(2):
         plt.text(j, i, cm[i, j], ha="center", va="center")
+plt.savefig(IMAGES_DIR / "confusion_matrix.png", dpi=150, bbox_inches="tight")
 plt.show()
+
 
 print("Эталонная модель:")
 print("Accuracy (доля верных ответов):", reference_accuracy)
