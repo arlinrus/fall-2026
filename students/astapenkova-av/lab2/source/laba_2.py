@@ -5,8 +5,11 @@ import matplotlib.pyplot as plt
 from sklearn.preprocessing import StandardScaler
 from sklearn.neighbors import KNeighborsClassifier  # эталонная реализация
 from sklearn.decomposition import PCA
-import subprocess
-from io import BytesIO
+from pathlib import Path
+from matplotlib.patches import Patch
+
+OUT_DIR = Path(__file__).resolve().parent.parent / "images"
+OUT_DIR.mkdir(parents=True, exist_ok=True)
 
 # 1. выбрать датасет для классификации, например на [kaggle](https://www.kaggle.com/datasets?tags=13302-Classification);
 DATA_URL = (
@@ -14,14 +17,7 @@ DATA_URL = (
     "benbobyabraham/heart_failure_prediction_dataset_kaggle/"
     "main/heart.csv"
 )
-
-result = subprocess.run(
-    ["curl", "-fLsS", DATA_URL],
-    capture_output=True,
-    check=True
-)
-
-data = pd.read_csv(BytesIO(result.stdout))
+data = pd.read_csv(DATA_URL)
 
 # размер датасета
 # print(data.shape)
@@ -42,10 +38,9 @@ data = pd.read_csv(BytesIO(result.stdout))
 # разделить на вход и выход
 target = 'HeartDisease'
 X = data.drop(columns=[target])
-categorial = X.select_dtypes(include='str').columns.tolist()
+categorial = [c for c in X.columns if not pd.api.types.is_numeric_dtype(X[c])]
 X = pd.get_dummies(X, columns=categorial, drop_first=True, dtype=int)
 y = data[target]
-
 
 X_train, X_test, y_train, y_test = train_test_split(X, y, test_size = 0.2, random_state=42, stratify=y)
 
@@ -55,11 +50,11 @@ y_train = y_train.to_numpy()
 y_test = y_test.to_numpy()
 
 scaler = StandardScaler()
-X_train = scaler.fit_transform(X_train)  # fit только на train!
+X_train = scaler.fit_transform(X_train)  
 X_test = scaler.transform(X_test)   
 
-# Training data shape: (734, 16)
-# Testing data shape: (184, 16)
+# Training data shape: (734, 15)
+# Testing data shape: (184, 15)
 # print("\nТренировочная ввыборка:", X_train.shape)
 # print("Тестовая выборка:", X_test.shape)
 
@@ -83,6 +78,7 @@ def parzen_window(X_train, y_train, x, k, p=2, kernel=gausen_kernel):
     if h == 0:
         h = 1e-12
     weights = kernel(sorted_dists / h)
+    weights[k:] = 0.0
     classes = np.unique(y_train)
     scores = {}
     for c in classes:
@@ -132,6 +128,7 @@ def parzen_score_diff_batch(X_ref, y_ref, Q, k, p=2, kernel=gausen_kernel, chunk
         h = sd[:, k]
         h = np.where(h == 0, 1e-12, h)
         W = kernel(sd / h[:, None])
+        W[:, k:] = 0.0  
         out.append((W * (sl == 1)).sum(axis=1) - (W * (sl == 0)).sum(axis=1))
     return np.concatenate(out)
  
@@ -143,14 +140,17 @@ def draw_decision_map(ax, X_ref, y_ref, pca, lims, k, X_pts, y_pts, title,
     grid_full = pca.inverse_transform(np.c_[xx.ravel(), yy.ravel()])
     Z = parzen_score_diff_batch(X_ref, y_ref, grid_full, k, p=p, kernel=kernel).reshape(xx.shape)
     lim = np.abs(Z).max()
-    ax.imshow(Z, extent=(xs[0], xs[-1], ys[0], ys[-1]), origin="lower",
-              cmap="RdYlGn", vmin=-lim, vmax=lim, aspect="auto")
-    ax.scatter(X_pts[:, 0], X_pts[:, 1], c=np.where(y_pts == 1, "lime", "red"),
-               edgecolors="black", s=pt_size)
+    im = ax.imshow(Z, extent=(xs[0], xs[-1], ys[0], ys[-1]), origin="lower",
+                   cmap="RdYlGn", vmin=-lim, vmax=lim, aspect="auto")
+    for c, color, name in ((1, "lime", "класс 1 (болезнь)"), (0, "red", "класс 0 (нет болезни)")):
+        mask = y_pts == c
+        ax.scatter(X_pts[mask, 0], X_pts[mask, 1], c=color, edgecolors="black", s=pt_size, label=name)
+    cbar = plt.colorbar(im, ax=ax)
+    cbar.set_label("Γ₁ − Γ₀\n(> 0: предсказан класс 1)")
+    ax.legend(loc="upper left", fontsize=8)
     ax.set_xlabel("PC1")
     ax.set_ylabel("PC2")
     ax.set_title(title)
-
 
 def pairwise_dist(A, B, p=2):
     diff = np.abs(A[:, None, :] - B[None, :, :])
@@ -166,15 +166,15 @@ def parzen_margins(D, y_ref, y_query, k, n_valid, kernel=gausen_kernel):
     h = sd[:, kk] # ширина окна Парзена
     h = np.where(h == 0, 1e-12, h)        
     W = kernel(sd / h[:, None])    
+    W[:, kk:] = 0.0                      
     classes = np.unique(y_ref)             
     G = np.stack([(W * (sl == c)).sum(axis=1) for c in classes],axis=1)  # для каждого объекта считаем суммарный вес соседей каждого класса G имеет размер (объекты × классы)
     own = classes[None, :] == y_query[:, None] # создаём маску: какой столбец G соответствует
     g_own = (G * own).sum(axis=1)          # суммарный вес соседей собственного класса
     g_other = np.where(own, -np.inf, G).max(axis=1) # максимальный суммарный вес среди всех остальных классов
-    total = np.where(G.sum(axis=1) == 0, 1e-12, G.sum(axis=1))  # общий вес всех соседей
-    return (g_own - g_other) / total
+    return g_own - g_other
 
-def stolp(X, y, k, delta=0.5, l0=10, p=2, kernel=gausen_kernel):
+def stolp(X, y, k, delta=0, l0=10, p=2, kernel=gausen_kernel):
     n = len(X)
     classes = np.unique(y)
     D = pairwise_dist(X, X, p)
@@ -182,8 +182,8 @@ def stolp(X, y, k, delta=0.5, l0=10, p=2, kernel=gausen_kernel):
     D_loo = D.copy()
     np.fill_diagonal(D_loo, np.inf)
     margins = parzen_margins(D_loo, y, y, k, n_valid=n - 1, kernel=kernel)
-    noise = np.where(margins < -delta)[0]
-    keep = np.where(margins >= -delta)[0]
+    noise = np.where(margins < delta)[0]
+    keep = np.where(margins >= delta)[0]
  
     omega = []
     for c in classes:
@@ -197,15 +197,11 @@ def stolp(X, y, k, delta=0.5, l0=10, p=2, kernel=gausen_kernel):
             break
         m = parzen_margins(D[np.ix_(rest, omega)], y[omega], y[rest], k,
                            n_valid=len(omega), kernel=kernel)
-        k_eff = min(k, len(omega) - 1)
-        pred_rest = parzen_predict(
-        X[omega], y[omega], X[rest],
-        k_eff, p=p, kernel=kernel)
-        n_err = int(np.sum(pred_rest != y[rest]))
-        history.append(n_err)
-        if n_err <= l0:
+        E = rest[m < 0]
+        history.append(len(E))
+        if len(E) < l0:
             break
-        omega.append(rest[np.argmin(m)])
+        omega.append(E[np.argmin(m[m < 0])])
  
     return np.array(omega), noise, history
 # 7. подготовить визуализацию результатов работы алгоритма отбора эталонов;
@@ -215,7 +211,7 @@ def stolp(X, y, k, delta=0.5, l0=10, p=2, kernel=gausen_kernel):
 if __name__ == "__main__":
     k_values = list(range(1, 50))
     optimal_k, losses = best_k(X_train, y_train, k_values, p=2, kernel=gausen_kernel)
-    print(f"Лучшее k по LOO: {optimal_k}, LOO-ошибка: {losses[optimal_k - 1]:.4f}")
+    print(f"Лучшее k по LOO: {optimal_k}, LOO-ошибка: {losses[k_values.index(optimal_k)]:.4f}")
  
     # эмпирический риск на обучающей выборке для каждого k
     train_errors = [
@@ -228,13 +224,13 @@ if __name__ == "__main__":
     plt.plot(k_values, losses, color="red", label="LOO (скользящий контроль)")
     plt.plot(k_values, train_errors, color="blue", label="эмпирический риск (обучение)")
     plt.axvline(optimal_k, color="gray", linestyle="--", label=f"оптимальное k = {optimal_k}")
-    plt.xticks(k_values, fontsize=8)      
+    plt.xticks(k_values[::2], fontsize=8) 
     plt.xlabel("число соседей k")
     plt.ylabel("частота ошибок")
     plt.title("Зависимость ошибки от числа соседей")
     plt.legend()
     plt.grid(True)
-    plt.savefig("/Users/arina/Desktop/university/fall-2026/students/astapenkova-av/lab2/images/loo_vs_k.png", dpi=150, bbox_inches="tight")
+    plt.savefig(OUT_DIR / "loo_vs_k.png", dpi=150, bbox_inches="tight")  
     plt.show()
  
     # PCA для визуализации
@@ -251,16 +247,14 @@ if __name__ == "__main__":
     ref_model = KNeighborsClassifier(n_neighbors=optimal_k)
     ref_model.fit(X_train, y_train)
     print(f"Точность sklearn KNN (k={optimal_k}): {ref_model.score(X_test, y_test):.4f}")
- 
-    omega, noise, history = stolp(X_train, y_train, optimal_k, delta=0.5, l0=10)
+
+    omega, noise, history = stolp(X_train, y_train, optimal_k, delta=0, l0=10)
     X_proto, y_proto = X_train[omega], y_train[omega]
-    print(f"\nSTOLP: эталонов {len(omega)} из {len(X_train)}, выбросов {len(noise)}")
- 
-    k_proto_values = list(range(1, len(omega) - 1))
-    k_proto, proto_losses = best_k(
-    X_proto, y_proto, k_proto_values,
-    p=2,
-    kernel=gausen_kernel)
+    print(f"\nSTOLP: эталонов {len(omega)} из {len(X_train)}, выбросов {len(noise)}, "
+          f"ошибок вне эталонов на последнем шаге {history[-1]}")
+
+
+    k_proto = min(optimal_k, len(omega) - 1)
 
 
     y_pred_proto = parzen_predict(X_proto, y_proto, X_test, k_proto, p=2, kernel=gausen_kernel)
@@ -277,7 +271,7 @@ if __name__ == "__main__":
     print(f"{'размер обучающей выборки':28}{len(X_train):12d}{len(omega):12d}")
  
     # график 7: результат отбора эталонов (до / отобранные / после)
-    fig, axes = plt.subplots(1, 3, figsize=(20, 6))
+    fig, axes = plt.subplots(1, 3, figsize=(20, 7), layout="constrained")
     draw_decision_map(axes[0], X_train, y_train, pca, lims, optimal_k, X2, y_train,
                       f"Без отбора: {len(X_train)} объектов, k = {optimal_k}", pt_size=14)
  
@@ -287,21 +281,115 @@ if __name__ == "__main__":
     is_noise[noise] = True
     rest = ~is_proto & ~is_noise
     ax = axes[1]
-    ax.scatter(X2[rest, 0], X2[rest, 1], c=np.where(y_train[rest] == 1, "lime", "red"),
-               s=14, alpha=0.35, label="остальные")
+   
+    for c, color, name in ((1, "lime", "класс 1"), (0, "red", "класс 0")):
+        m = rest & (y_train == c)
+        ax.scatter(X2[m, 0], X2[m, 1], c=color, s=14, alpha=0.35, label=f"остальные, {name}")
     ax.scatter(X2[is_noise, 0], X2[is_noise, 1], marker="x", c="black", s=40,
                label=f"выбросы ({is_noise.sum()})")
-    ax.scatter(X2[is_proto, 0], X2[is_proto, 1], c=np.where(y_train[is_proto] == 1, "lime", "red"),
-               edgecolors="black", linewidths=1.2, s=70, label=f"эталоны ({is_proto.sum()})")
+    for c, color, name in ((1, "lime", "класс 1"), (0, "red", "класс 0")):
+        m = is_proto & (y_train == c)
+        ax.scatter(X2[m, 0], X2[m, 1], c=color, edgecolors="black", linewidths=1.2, s=70,
+                   label=f"эталоны, {name} ({m.sum()})")
     ax.set_xlim(lims[0], lims[1])
     ax.set_ylim(lims[2], lims[3])
     ax.set_xlabel("PC1")
     ax.set_ylabel("PC2")
     ax.set_title("Результат отбора эталонов (STOLP)")
-    ax.legend()
+    ax.legend(fontsize=8, loc="upper center", bbox_to_anchor=(0.5, -0.15), ncol=3)
  
     draw_decision_map(axes[2], X_proto, y_proto, pca, lims, k_proto, X2[omega], y_proto,
                       f"С отбором: {len(omega)} эталонов, k = {k_proto}", pt_size=40)
-    fig.savefig("/Users/arina/Desktop/university/fall-2026/students/astapenkova-av/lab2/images/stolp_result.png", dpi=150, bbox_inches="tight")
+    fig.savefig(OUT_DIR / "stolp_result.png", dpi=150, bbox_inches="tight")  
     plt.show()
- 
+
+    overall = data[target].mean()
+
+    fig, (ax_cat, ax_pc) = plt.subplots(1, 2, figsize=(18, 7), layout="constrained", width_ratios=[1.3, 1])
+    labels, shares, counts = [], [], []
+    for col in ["ST_Slope", "ExerciseAngina", "ChestPainType", "Sex", "FastingBS", "RestingECG"]:
+        g = data.groupby(col)[target].agg(["mean", "count"])
+        for level, row in g.iterrows():
+            labels.append(f"{col} = {level}")
+            shares.append(row["mean"])
+            counts.append(int(row["count"]))
+    shares = np.array(shares)
+    pos = np.arange(len(labels))[::-1]
+    ax_cat.barh(pos, shares, color=np.where(shares > overall, "tab:green", "tab:red"))
+    ax_cat.axvline(overall, color="black", linestyle="--")
+    for y_pos, sh, cnt in zip(pos, shares, counts):
+        ax_cat.text(sh + 0.01, y_pos, f"{sh:.0%} (n={cnt})", va="center", fontsize=8)
+    ax_cat.set_yticks(pos, labels, fontsize=8)
+    ax_cat.set_xlim(0, 1.1)
+    ax_cat.set_xlabel("доля пациентов с болезнью сердца в группе")
+    ax_cat.set_title("(а) Доля больных по категориальным признакам")
+    ax_cat.legend(handles=[Patch(color="tab:green", label="больных больше, чем в среднем"),
+                           Patch(color="tab:red", label="больных меньше, чем в среднем"),
+                           plt.Line2D([], [], color="black", linestyle="--",
+                                      label=f"доля больных во всей выборке ({overall:.0%})")],
+                  loc="lower right", fontsize=8)
+
+    feature_names = X.columns.to_numpy()
+    pc1 = pca.components_[0]
+    order = np.argsort(pc1)
+    corr = np.corrcoef(pca.transform(X_train)[:, 0], y_train)[0, 1]
+    ax_pc.barh(np.arange(len(order)), pc1[order], color=np.where(pc1[order] < 0, "tab:green", "tab:red"))
+    ax_pc.axvline(0, color="black", linewidth=0.8)
+    ax_pc.set_yticks(np.arange(len(order)), feature_names[order], fontsize=8)
+    ax_pc.set_xlabel("коэффициент признака в PC1")
+    ax_pc.set_title(f"(б) Из чего состоит ось PC1 на картах\n(корреляция PC1 с диагнозом {corr:.2f})")
+    ax_pc.legend(handles=[Patch(color="tab:green", label="сдвигает объект влево, к больным"),
+                          Patch(color="tab:red", label="сдвигает объект вправо, к здоровым")],
+                 loc="lower right", fontsize=8)
+    fig.savefig(OUT_DIR / "data_features.png", dpi=150, bbox_inches="tight")
+    plt.show()
+
+    # рисунок 2: числовые признаки у больных и здоровых
+    num_cols = ["Age", "MaxHR", "Oldpeak", "RestingBP", "Cholesterol"]
+    fig, axes_num = plt.subplots(1, len(num_cols), figsize=(20, 5.5), layout="constrained")
+    for ax, col in zip(axes_num, num_cols):
+        values = data[col]
+        title = col
+        if col == "Cholesterol":                     # нули - скрытые пропуски, на графике не учитываются
+            values = values.where(values > 0)
+            title = "Cholesterol (без нулевых значений)"
+        parts = [values[data[target] == c].dropna() for c in (0, 1)]
+        bp = ax.boxplot(parts, patch_artist=True, widths=0.6)
+        for patch, color in zip(bp["boxes"], ("tab:red", "tab:green")):
+            patch.set_facecolor(color)
+            patch.set_alpha(0.6)
+        ax.set_xticks([1, 2], ["нет болезни", "болезнь"])
+        ax.set_title(title)
+        ax.set_ylabel(col)
+        ax.legend(bp["boxes"], [f"нет болезни: медиана {parts[0].median():g}",
+                                f"болезнь: медиана {parts[1].median():g}"],
+                  fontsize=8, loc="upper center", bbox_to_anchor=(0.5, -0.1), ncol=1)
+    fig.suptitle("Числовые признаки у больных и здоровых (ящик - 50% пациентов, линия - медиана)")
+    fig.savefig(OUT_DIR / "data_numeric.png", dpi=150, bbox_inches="tight")
+    plt.show()
+
+    cm = np.array([[np.sum((y_test == t) & (y_pred_custom == p_)) for p_ in (0, 1)] for t in (0, 1)])
+    sensitivity = cm[1, 1] / cm[1].sum()
+    specificity = cm[0, 0] / cm[0].sum()
+    fig, ax_cm = plt.subplots(figsize=(7, 5.5), layout="constrained")
+    im = ax_cm.imshow(cm, cmap="Blues")
+    names = [["верно: здоров", "ложная тревога"], ["пропуск болезни", "верно: болен"]]
+    for i in range(2):
+        for j in range(2):
+            ax_cm.text(j, i, f"{cm[i, j]}\n{names[i][j]}", ha="center", va="center", fontsize=10,
+                       color="white" if cm[i, j] > cm.max() / 2 else "black")
+    ax_cm.set_xticks([0, 1], ["нет болезни", "болезнь"])
+    ax_cm.set_yticks([0, 1], ["нет болезни", "болезнь"])
+    ax_cm.set_xlabel("предсказание модели")
+    ax_cm.set_ylabel("истинный диагноз")
+    ax_cm.set_title(f"Матрица ошибок окна Парзена на тесте (k = {optimal_k})\n"
+                    f"чувствительность {sensitivity:.0%}, специфичность {specificity:.0%}")
+    cbar = plt.colorbar(im, ax=ax_cm)
+    cbar.set_label("число пациентов")
+    fig.savefig(OUT_DIR / "confusion_matrix.png", dpi=150, bbox_inches="tight")
+    plt.show()
+
+    print(f"\nЧувствительность (найдено больных): {cm[1, 1]} из {cm[1].sum()} = {sensitivity:.2%}")
+    print(f"Специфичность (верно определено здоровых): {cm[0, 0]} из {cm[0].sum()} = {specificity:.2%}")
+    print(f"Пациентов с Cholesterol = 0: {(data['Cholesterol'] == 0).sum()}, "
+          f"из них больны {data.loc[data['Cholesterol'] == 0, target].mean():.0%}")
