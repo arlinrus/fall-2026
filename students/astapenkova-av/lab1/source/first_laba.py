@@ -3,9 +3,9 @@ import numpy as np
 from sklearn.model_selection import train_test_split
 import matplotlib.pyplot as plt
 from sklearn.metrics import (accuracy_score, precision_score, recall_score, f1_score, confusion_matrix)
-import subprocess
-from io import BytesIO
 from pathlib import Path
+from sklearn.linear_model import RidgeClassifier
+
 
 IMAGES_DIR = Path(__file__).resolve().parent.parent / "images"
 IMAGES_DIR.mkdir(exist_ok=True)
@@ -15,17 +15,12 @@ url = (
     "mohitbatheja/diabetes-risk-prediction-multinomial-logistic-regression/"
     "main/diabetes_risk.csv")
 
-result = subprocess.run(
-    ["curl", "-fLsS", url],
-    capture_output=True,
-    check=True)
-
-data = pd.read_csv(BytesIO(result.stdout))
+data = pd.read_csv(url)
 
 h = 1e-3 # шаг
 lambda_ = 0.001 # какая доля новой ошибки учитывается в новом Q
 gamma = 0.9 # насколько сильно учитывается предыдущая инерция
-q_sz = 100 # выбираются примрено 100 случайных обектов
+q_sz = 100 # выбираются примерно 100 случайных объектов 
 eps = 1e-6 #порог чувствительности
 tau = 1e-3 #l2 регуляризация
 check_every = 200 # проверяем сходимость
@@ -55,7 +50,10 @@ y = data["diabetes_risk"].map({
 
 X_train, X_test, y_train, y_test = train_test_split(X,y,test_size = 0.2,random_state=42,stratify=y)
 
+X_train, X_val, y_train, y_val = train_test_split(X_train, y_train, test_size=0.2, random_state=42, stratify=y_train)
+
 X_train = X_train.copy()
+X_val = X_val.copy()
 X_test = X_test.copy()
 
 mode_columns = ["alcohol_consumption", "smoking_status", "income_bracket"]
@@ -63,6 +61,7 @@ for column in mode_columns:
     train_mode = X_train[column].mode(dropna=True)
     fill_value = train_mode.iloc[0]
     X_train[column] = X_train[column].fillna(fill_value)
+    X_val[column] = X_val[column].fillna(fill_value)  
     X_test[column] = X_test[column].fillna(fill_value)
 categorical_columns = X.select_dtypes(exclude="number").columns.tolist()
 # print(categorical_columns)
@@ -71,19 +70,22 @@ num_columns = X.select_dtypes(include="number").columns.tolist()
 mu = X_train[num_columns].mean()
 sigma = X_train[num_columns].std().replace(0, 1)
 X_train[num_columns] = (X_train[num_columns] - mu) / sigma
+X_val[num_columns] = (X_val[num_columns] - mu) / sigma  
 X_test[num_columns] = (X_test[num_columns] - mu) / sigma
 
 X_train = pd.get_dummies(X_train, columns=categorical_columns,drop_first=True)
+X_val = pd.get_dummies(X_val, columns=categorical_columns, drop_first=True)  
 X_test = pd.get_dummies(X_test, columns=categorical_columns, drop_first=True)
+X_val = X_val.reindex(columns=X_train.columns, fill_value=0) 
 X_test = X_test.reindex(columns=X_train.columns, fill_value=0)
 
 X_train = X_train.astype(float)
+X_val = X_val.astype(float)  
 X_test = X_test.astype(float)
 
 X_train["bias"] = -1.0
+X_val["bias"] = -1.0  
 X_test["bias"] = -1.0
-
-X_train, X_val, y_train, y_val = train_test_split(X_train, y_train, test_size=0.2, random_state=42, stratify=y_train)
 
 n_features = X_train.shape[1]
 
@@ -135,7 +137,7 @@ def gradient_loss(x_i, y_i, w):
   gradient = -2 * (1-margin) *y_i * x_i #это производная внешней функции
   return gradient
 
-# Рекурентая оценка функционала качества
+# Рекуррентная оценка функционала качества
 def update_quality(Q, loss, lambda_): #рекуррентное обновление оценки функционала качества
   return lambda_ * loss + (1 - lambda_) * Q
 
@@ -171,7 +173,8 @@ def choose_by_margin(X, y, w, rng, eps=1e-8):
 
 
 # Реализовать метод стохастического градиентного спуска с инерцией
-def SGD(X, y, w, h, lambda_, gamma, q_sz, eps, max_iter=40000, by_margin = False, tau=0, seed=42):
+# в него записывается значение Q на каждой итерации (нужно для графика Q)
+def SGD(X, y, w, h, lambda_, gamma, q_sz, eps, max_iter=40000, by_margin = False, tau=0, seed=42, Q_history=None):
     X = np.asarray(X, dtype=float)
     y = np.asarray(y, dtype=float)
     w = np.asarray(w, dtype=float).copy()
@@ -210,7 +213,7 @@ def SGD(X, y, w, h, lambda_, gamma, q_sz, eps, max_iter=40000, by_margin = False
         gradient = l2_gradient(gradient_loss(x_i, y_i, w), w, tau)
  
         # Momentum:
-        # v := γv + (1 - γ)∇L(w, x_i) # учитывает предыдущию градиенты
+        # v := γv + (1 - γ)∇L(w, x_i) # учитывает предыдущие градиенты  
         v = gamma * v + (1 - gamma) * gradient
  
         # w := w - hv
@@ -222,7 +225,9 @@ def SGD(X, y, w, h, lambda_, gamma, q_sz, eps, max_iter=40000, by_margin = False
  
         # Q := λξ_i + (1 - λ)Q
         Q = update_quality(Q, e_i, lambda_)
- 
+        if Q_history is not None:  
+            Q_history.append(Q)
+
         if n_iter % check_every == 0:
             if (
                 np.linalg.norm(w - w_o) < eps
@@ -236,7 +241,7 @@ def SGD(X, y, w, h, lambda_, gamma, q_sz, eps, max_iter=40000, by_margin = False
     return w
  
 # Скорейший градиентный спуск
-def SGD_steepest(X, y, w, lambda_, q_sz, eps, max_iter, tau=0, random_state=42):
+def SGD_steepest(X, y, w, lambda_, q_sz, eps, max_iter, tau=0, random_state=42, Q_history=None): 
     X = np.asarray(X, dtype=float)
     y = np.asarray(y, dtype=float)
     w = np.asarray(w, dtype=float).copy()
@@ -277,7 +282,9 @@ def SGD_steepest(X, y, w, lambda_, q_sz, eps, max_iter, tau=0, random_state=42):
         w = w - h_i * gradient
  
         Q = update_quality(Q, e_i,lambda_)
- 
+        if Q_history is not None:  
+            Q_history.append(Q)
+
         if n_iter % check_every == 0:
             if (np.linalg.norm(w - w_old) < eps
                 and abs(Q - Q_old) < eps):
@@ -317,8 +324,6 @@ margins = margin_classifier(X_train, y_train, w_corr)
 print("Минимальный отступ:", np.min(margins))
 print("Максимальный отступ:", np.max(margins))
 
-w_corr = weights_correlation(X_train, y_train)
-
 w_corr = SGD(X_train, y_train,w_corr,h,lambda_,gamma,q_sz,eps, tau=tau)
 
 margins_corr_trained = np.sort(margin_classifier(X_train, y_train, w_corr))
@@ -332,7 +337,7 @@ plt.ylabel("Отступ")
 plt.title("Отступы после обучения (инициализация через корреляцию)")
 plt.legend()
 plt.grid()
-plt.savefig(IMAGES_DIR / "inicialization_with_correlation.png", dpi=150, bbox_inches="tight")
+plt.savefig(IMAGES_DIR / "initialization_with_correlation.png", dpi=150, bbox_inches="tight") 
 plt.show()
 
 # Обучить со случайной инициализацией весов через мультистарт
@@ -374,7 +379,7 @@ plt.ylabel("Отступ")
 plt.title("Отступы после обучения (мультистарт)")
 plt.legend()
 plt.grid()
-plt.savefig(IMAGES_DIR / "random_and_margin.png", dpi=150, bbox_inches="tight")
+plt.savefig(IMAGES_DIR / "multistart.png", dpi=150, bbox_inches="tight")  
 plt.show()
 
 # Обучить со случайным предъявлением и с п.8
@@ -384,11 +389,19 @@ w_start = np.random.default_rng(7).uniform(
     size=n_features
 )
 
+Q_hist_random, Q_hist_margin, Q_hist_steepest = [], [], []
+
 # без отступа
-w_random = SGD(X_train,y_train,w_start.copy(),h,lambda_,gamma,q_sz,eps,by_margin=False,tau=tau)
+w_random = SGD(X_train,y_train,w_start.copy(),h,lambda_,gamma,q_sz,eps,by_margin=False,tau=tau, Q_history=Q_hist_random)
 
 #с отступом
-w_margin = SGD(X_train,y_train,w_start.copy(),h,lambda_,gamma,q_sz,eps,by_margin=True,tau=tau)
+w_margin = SGD(X_train,y_train,w_start.copy(),h,lambda_,gamma,q_sz,eps,by_margin=True,tau=tau, Q_history=Q_hist_margin)
+
+abs_m = np.abs(margin_classifier(X_train, y_train, w_margin))
+p_choice = 1 / (abs_m + 1e-8)
+p_choice = np.sort(p_choice / p_choice.sum())
+print(f"Предъявление по |M|: макс. вероятность выбора одного объекта = {p_choice[-1]:.4f}, "
+      f"сумма вероятностей 10 самых частых объектов = {p_choice[-10:].sum():.4f}")
 
 margins_random = margin_classifier(X_train,y_train,w_random)
 
@@ -409,8 +422,9 @@ w_steepest, Q_steepest = SGD_steepest(
     q_sz,
     eps,
     max_iter=40000,
-    tau=tau
-) 
+    tau=tau,
+    Q_history=Q_hist_steepest  
+)
 
 margins_steepest = np.sort(margin_classifier(X_train, y_train, w_steepest))
 loss_steepest = np.mean((1 - margins_steepest) ** 2)
@@ -420,18 +434,30 @@ margins_random_sorted = np.sort(margins_random)
 margins_margin_sorted = np.sort(margins_margin)
 
 plt.figure(figsize=(10, 5))
-plt.plot(margins_random_sorted,label="Рандомная выборка")
-plt.plot(margins_margin_sorted,label="By |margin|")
+plt.plot(margins_random_sorted,label="Случайное предъявление")
+plt.plot(margins_margin_sorted,label="Предъявление по модулю отступа")
 
 # Граница ошибок:
 # M < 0 — объект классифицирован неправильно
-plt.axhline(0, linestyle="--")
-plt.xlabel("Сортировка по отступу")
-plt.ylabel("Margin")
-plt.title("Рандомное предъявление vs предъявление by |margin|")
+plt.axhline(0, color="red", linestyle="--", label="M = 0")
+plt.xlabel("Объекты, отсортированные по отступу")
+plt.ylabel("Отступ")
+plt.title("Отступы после обучения: случайное предъявление и предъявление по |M|")
 plt.legend()
 plt.grid()
 plt.savefig(IMAGES_DIR / "margin.png", dpi=150, bbox_inches="tight")
+plt.show()
+
+plt.figure(figsize=(10, 5))
+plt.plot(Q_hist_random, label="SGD с инерцией, случайное предъявление")
+plt.plot(Q_hist_margin, label="SGD с инерцией, предъявление по |M|")
+plt.plot(Q_hist_steepest, label="Скорейший спуск")
+plt.xlabel("Итерация")
+plt.ylabel("Q (рекуррентная оценка)")
+plt.title("Рекуррентная оценка функционала качества Q")
+plt.legend()
+plt.grid()
+plt.savefig(IMAGES_DIR / "quality_functional.png", dpi=150, bbox_inches="tight")
 plt.show()
 
 # Оценим качество классификации
@@ -506,13 +532,18 @@ best_own_w = models[best_model_name]
 
 print("\nЛучшая собственная модель:", best_model_name)
 print("Ошибка на обучении:", train_losses[best_model_name])
+
+weights_table = pd.Series(best_own_w, index=X_train.columns).drop("bias")
+print("\nНаибольшие по модулю веса лучшей модели:")
+print(weights_table.reindex(weights_table.abs().sort_values(ascending=False).index).head(8).round(3))
+city_w = weights_table[[c for c in weights_table.index if c.startswith("city_")]]
+print(f"Веса city_*: от {city_w.min():.3f} до {city_w.max():.3f}")
  
 print("\nКачество лучшей собственной модели на тесте:")
 own_metrics = evaluate(X_test,y_test,best_own_w)
 print(own_metrics)
 
 # Сравнить лучшую реализацию с эталонной
-from sklearn.linear_model import RidgeClassifier
  
 reference_model = RidgeClassifier(alpha=0.0,fit_intercept=False)
  
@@ -528,31 +559,50 @@ reference_recall = recall_score( y_test, y_pred_reference, pos_label=1)
  
 reference_f1 = f1_score( y_test, y_pred_reference,pos_label=1)
 
+# RidgeClassifier минимизирует СУММУ квадратов + alpha*||w||^2,
+alpha_equiv = tau * len(X_train) / 2
+reference_reg = RidgeClassifier(alpha=alpha_equiv, fit_intercept=False).fit(X_train, y_train)
+y_pred_reference_reg = reference_reg.predict(X_test)
+print(f"\nЭталон с alpha = tau*l/2 = {alpha_equiv:.2f}: "
+      f"Accuracy = {accuracy_score(y_test, y_pred_reference_reg):.4f}, "
+      f"F1 = {f1_score(y_test, y_pred_reference_reg, pos_label=1):.4f}")
+
 
 # Метрики качества модели
 y_pred_own = predict(X_test, best_own_w)
 metrics_names = ["Accuracy", "Precision", "Recall", "F1"]
-metrics_values = own_metrics
-plt.figure(figsize=(7, 4))
-plt.bar(metrics_names, metrics_values)
-plt.ylim(0, 1)
-plt.title("Качество модели")
-plt.ylabel("Значение")
+reference_metrics = (reference_accuracy, reference_precision, reference_recall, reference_f1)
+x_pos = np.arange(len(metrics_names))
+bar_w = 0.38
+plt.figure(figsize=(8, 4.5))
+bars_own = plt.bar(x_pos - bar_w / 2, own_metrics, bar_w, label=f"Собственная модель ({best_model_name})")
+bars_ref = plt.bar(x_pos + bar_w / 2, reference_metrics, bar_w, label="Эталон (RidgeClassifier)")
+for bars in (bars_own, bars_ref):
+    for b in bars:
+        plt.text(b.get_x() + b.get_width() / 2, b.get_height() + 0.01, f"{b.get_height():.3f}",
+                 ha="center", va="bottom", fontsize=9)
+plt.xticks(x_pos, metrics_names)
+plt.ylim(0, 1.05)
+plt.title("Качество на тестовой выборке: собственная модель и эталон")
+plt.ylabel("Значение метрики")
+plt.legend(loc="lower right")
 plt.savefig(IMAGES_DIR / "quality_model.png", dpi=150, bbox_inches="tight")
 plt.show()
 
-# мтрица ошибок 
+# матрица ошибок
 cm = confusion_matrix(y_test, y_pred_own)
-plt.figure(figsize=(5, 4))
-plt.imshow(cm)
-plt.title("Матрица ошибок")
+plt.figure(figsize=(5.5, 4))
+plt.imshow(cm, cmap="Blues")
+plt.colorbar(label="Число объектов")
+plt.title(f"Матрица ошибок ({best_model_name}, тест)")
 plt.xlabel("Предсказанный класс")
 plt.ylabel("Истинный класс")
 plt.xticks([0, 1], ["-1", "1"])
 plt.yticks([0, 1], ["-1", "1"])
 for i in range(2):
     for j in range(2):
-        plt.text(j, i, cm[i, j], ha="center", va="center")
+        text_color = "white" if cm[i, j] > cm.max() / 2 else "black"
+        plt.text(j, i, cm[i, j], ha="center", va="center", color=text_color)
 plt.savefig(IMAGES_DIR / "confusion_matrix.png", dpi=150, bbox_inches="tight")
 plt.show()
 
