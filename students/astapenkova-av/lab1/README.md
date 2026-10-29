@@ -36,10 +36,9 @@
 
 ### Обучаемый порог активации (bias)
 
-$$
-a(x) = \operatorname{sign}\left(\sum_{j=1}^{n} w_j f_j(x) - w_0\right).
-$$
-
+```math
+a(x) = \mathrm{sign}\left(\sum_{j=1}^{n} w_j f_j(x) - w_0\right)
+```
 
 ## 2. Вычисление отступа объекта
 
